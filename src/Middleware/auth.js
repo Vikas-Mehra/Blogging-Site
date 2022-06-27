@@ -1,9 +1,13 @@
+const mongoose = require("mongoose");
 const jwt = require("jsonwebtoken");
 const blogModel = require("../Models/blogModel");
+const authorModel = require("../Models/authorModel");
 
-////  Authenication_Part  ////
-const authentication = (req, res, next) => {
+/*--------------------------------------------------------------------------------------
+--------------------------------- 1. Authenication Middleware--------------------------- --------------------------------------------------------------------------------------*/
+const authentication = async (req, res, next) => {
   try {
+    //Check If Token present in Header.
     let token = req.headers["x-api-key"];
     if (!token) {
       return res.status(400).send({
@@ -11,46 +15,127 @@ const authentication = (req, res, next) => {
         msg: "TOKEN Absent.",
       });
     }
-    let decodedToken = jwt.verify(token, "this-is-aSecretTokenForLogin");
-    if (!decodedToken) {
-      return res.status(401).send({
+
+    //~~~~~~~~Verify Token.
+    let decodedToken;
+    try {
+      decodedToken = jwt.verify(token, "this-is-aSecretTokenForLogin");
+    } catch (error) {
+      return res.status(400).send({
         status: false,
-        msg: "Invalid Token. You are NOT Authenticated.",
+        msg: "Token INVALID. You are NOT Authenticated.",
       });
     }
-    req.headers["x-api-key"] = decodedToken;
+
+    //~~~~~~~~Search Author in Database for Authentication.
+    const author_Id = decodedToken.authorId;
+    const authorByAuthorId = await authorModel.findById(author_Id);
+    if (!authorByAuthorId) {
+      return res.status(401).send({
+        status: false,
+        msg: "NOT Authenticated:Your AuthorID(in TOKEN) Not In Database. Login AGAIN(NEW Token Required).",
+      });
+    }
+
+    //Author Authenticated, so call "next()".
     next();
   } catch (error) {
     return res.status(500).send({ status: false, Error: error.message });
   }
 };
 
-////  Authorisation_Part  ////
+/*----------------------------------------------------------------------------------------------------------------------- 2. Authorisation Middleware -------------------------------- -----------------------------------------------------------------------------------------*/
 const ownerAuthorization = async (req, res, next) => {
   try {
-    console.log("Delete");
+    //Get BlogID from Path-params.
+    const blog_Id = req.params.blogId;
 
-    const author_Id = req.headers["x-api-key"].authorId;
-    console.log("Delet2");
+    //~~~~Check if "blogId" is a Valid Mongoose ObjectID.
+    if (!mongoose.Types.ObjectId.isValid(blog_Id)) {
+      return res.status(400).send({
+        status: false,
+        msg: "BlogID in Path-Params NOT a Valid Mongoose-ObjectID.",
+      });
+    }
 
-    const blog_Id = ( req.params.blogId || req.query.blogId );
-    console.log("Dele3");
-    const blog = await blogModel.findById(blog_Id);
-    if (blog.authorId.toString() !== author_Id)
+    //~~~~~~~~Find Blog by BlogID.
+    const blogByBlogId = await blogModel.findById(blog_Id);
+    if (!blogByBlogId) {
+      return res.status(404).send({
+        status: false,
+        msg: "Blog Not Found.",
+      });
+    }
+
+    //~~~~~~Decode Token to match AuthorID with "blog's-authorId".
+    let token = req.headers["x-api-key"];
+    let decodedToken = jwt.verify(token, "this-is-aSecretTokenForLogin");
+
+    //~~~~~~Check for Unauthorised Author.
+    if (blogByBlogId.authorId.toString() !== decodedToken.authorId) {
       return res.status(403).send({
         status: false,
-        msg: "Unauthorized Author.",
+        msg: "Unauthorized Author: You can't Edit/Delete other's Blogs.",
       });
+    }
+
+    //Author Authenticated, so call "next()".
     next();
   } catch (error) {
-    console.log("Del4");
-
-    res.status(500).send({
+    return res.status(500).send({
       status: false,
       msg: error.message,
     });
   }
 };
 
+/*----------------------------------------------------------------------------------------------------------------- 3. Authorisation Middleware for DeleteByQuery ------------------- -----------------------------------------------------------------------------------------*/
+const queryAuthorization = async (req, res, next) => {
+  try {
+    //IF No Queries Provided.
+    if (!Object.keys(req.query).length) {
+      return res.status(400).send({
+        status: false,
+        msg: "No Queries Provided.",
+      });
+    }
+
+    //Find ALL Blogs with COMBINED Queries.
+    let blogs = await blogModel.find(req.query);
+    if (!blogs.length) {
+      return res.status(404).send({
+        status: false,
+        msg: "NO Blogs Found.",
+      });
+    }
+
+    //~~~~~~Decode Token to match AuthorID with "blog's-authorId".
+    const token = req.headers["x-api-key"];
+    const decodedToken = jwt.verify(token, "this-is-aSecretTokenForLogin");
+
+    //~~~~~~Check for Unauthorised Author.
+    const check = blogs.filter(
+      (x) => x.authorId.toString() === decodedToken.authorId
+    );
+    //If Author has No own Blogs.
+    if (!check.length) {
+      return res.status(403).send({
+        status: false,
+        msg: "Unauthorized Author: You can't Edit or Delete other's Blogs.",
+      });
+    }
+
+    //Author Authenticated, so call "next()".
+    next();
+  } catch (error) {
+    return res.status(500).send({
+      status: false,
+      msg: error.message,
+    });
+  }
+};
+
+//Exported Middlewares
 module.exports.authentication = authentication;
 module.exports.ownerAuthorization = ownerAuthorization;
+module.exports.queryAuthorization = queryAuthorization;
