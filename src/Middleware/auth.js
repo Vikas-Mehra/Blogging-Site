@@ -20,10 +20,10 @@ const authentication = async (req, res, next) => {
     let decodedToken;
     try {
       decodedToken = jwt.verify(token, "this-is-aSecretTokenForLogin");
-    } catch (error) {
+    } catch (error) {       //If Signature or Token-format Incorrect or Token-Invalid.
       return res.status(400).send({
         status: false,
-        msg: "Token INVALID. You are NOT Authenticated.",
+        msg: error.message,
       });
     }
 
